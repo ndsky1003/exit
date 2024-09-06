@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-type IExitable interface {
+type iExitable interface {
 	Exit() error
 }
 
@@ -21,7 +21,7 @@ func (this call_back_func) Exit() error {
 
 type namefn struct {
 	name     string
-	fn       IExitable
+	fn       iExitable
 	priority int
 }
 
@@ -33,7 +33,7 @@ func Push(fn func() error, opts ...*options) {
 	sort.Slice(arr, func(i, j int) bool { return arr[i].priority > arr[j].priority })
 }
 
-func PushExitable(fn IExitable, opts ...*options) {
+func PushExitable(fn iExitable, opts ...*options) {
 	opt := NewOptions().Merge(opts...)
 	arr = append(arr, namefn{name: opt.getName(), fn: fn, priority: opt.getPriority()})
 	sort.Slice(arr, func(i, j int) bool { return arr[i].priority > arr[j].priority })
@@ -41,7 +41,7 @@ func PushExitable(fn IExitable, opts ...*options) {
 
 var exiting int32 = 0
 
-func Exit() {
+func exit() {
 
 	if b := atomic.CompareAndSwapInt32(&exiting, 0, 1); !b {
 		return
@@ -71,6 +71,6 @@ func init() {
 
 	go func() {
 		<-ch
-		Exit()
+		exit()
 	}()
 }
