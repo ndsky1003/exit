@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 type iExitable interface {
@@ -19,58 +22,116 @@ func (this call_back_func) Exit() error {
 	return this()
 }
 
-type namefn struct {
-	name     string
-	fn       iExitable
-	priority int
+type nameFn struct {
+	fn  iExitable
+	opt *Option
 }
 
-var arr []namefn
-
-func Push(fn func() error, opts ...*options) {
-	opt := NewOptions().Merge(opts...)
-	arr = append(arr, namefn{name: opt.getName(), fn: call_back_func(fn), priority: opt.getPriority()})
-	sort.Slice(arr, func(i, j int) bool { return arr[i].priority > arr[j].priority })
+type exitManager struct {
+	tasks   []nameFn
+	exiting int32
+	ch      chan os.Signal
+	l       sync.Mutex
+	opt     *OptionMgr
 }
 
-func PushExitable(fn iExitable, opts ...*options) {
-	opt := NewOptions().Merge(opts...)
-	arr = append(arr, namefn{name: opt.getName(), fn: fn, priority: opt.getPriority()})
-	sort.Slice(arr, func(i, j int) bool { return arr[i].priority > arr[j].priority })
+func NewExitManager(opts ...*OptionMgr) *exitManager {
+	opt := OptionsMgr().
+		SetLockFile(fmt.Sprintf("/tmp/%s.lock", filepath.Base(os.Args[0]))).
+		Merge(opts...)
+
+	lockFile := *opt.lockedfile
+	if checkLock(lockFile) {
+		fmt.Println("Another instance is already running. Exiting...")
+		os.Exit(1)
+	}
+
+	if err := createLock(lockFile); err != nil {
+		fmt.Printf("Failed to create lock file: %v\n", err)
+		os.Exit(1)
+	}
+	em := &exitManager{
+		ch:  make(chan os.Signal),
+		opt: opt,
+	}
+	signal.Notify(em.ch, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	go em.waitForSignal()
+	return em
 }
 
-var exiting int32 = 0
+func (this *exitManager) Push(fn func() error, opts ...*Option) {
+	opt := Options().
+		SetPriority(0).
+		SetTimeout(10 * time.Second).
+		SetName("").
+		Merge(opts...)
+	this.l.Lock()
+	defer this.l.Unlock()
+	this.tasks = append(this.tasks, nameFn{fn: call_back_func(fn), opt: opt})
+	sort.Slice(this.tasks, func(i, j int) bool { return *this.tasks[i].opt.priority > *this.tasks[j].opt.priority })
+}
 
-func exit() {
+func (this *exitManager) PushExitable(fn iExitable, opts ...*Option) {
+	opt := Options().Merge(opts...)
+	this.l.Lock()
+	defer this.l.Unlock()
+	this.tasks = append(this.tasks, nameFn{opt: opt, fn: fn})
+	sort.Slice(this.tasks, func(i, j int) bool { return *this.tasks[i].opt.priority > *this.tasks[j].opt.priority })
+}
 
-	if b := atomic.CompareAndSwapInt32(&exiting, 0, 1); !b {
+func (this *exitManager) exit() {
+	if b := atomic.CompareAndSwapInt32(&this.exiting, 0, 1); !b {
 		return
 	}
 
 	fmt.Println("[EXIT] ################ 程序退出开始 ##############")
 
-	for i := 0; i < len(arr); i++ {
-		obj := arr[i]
-		if err := obj.fn.Exit(); err != nil {
-			fmt.Printf("[EXIT] ################ %v 执行失败:%v ##############\n", obj.name, err)
+	this.l.Lock()
+	defer this.l.Unlock()
+	lockfile := *this.opt.lockedfile
+
+	for _, obj := range this.tasks {
+		done := make(chan error)
+		go func(f iExitable) {
+			done <- f.Exit()
+		}(obj.fn)
+		timeout := *obj.opt.timeout
+		name := *obj.opt.name
+
+		select {
+		case err := <-done:
+			if err != nil {
+				fmt.Printf("[EXIT] ################ %v 执行失败:%v ##############\n", name, err)
+			} else {
+				fmt.Printf("[EXIT] ################ %v 执行成功 ##############\n", name)
+			}
+		case <-time.After(timeout):
+			fmt.Printf("[EXIT] ################ %v 执行超时 ##############\n", name)
 		}
 	}
 
 	fmt.Println("[EXIT] ################ 程序退出结束 ##############")
-
+	os.Remove(lockfile) // 删除锁文件
 	os.Exit(0)
 }
 
-var ch chan os.Signal
+func (em *exitManager) waitForSignal() {
+	<-em.ch
+	em.exit()
+}
 
-func init() {
+func checkLock(lockFile string) bool {
+	if _, err := os.Stat(lockFile); os.IsNotExist(err) {
+		return false
+	}
+	return true
+}
 
-	ch = make(chan os.Signal)
-
-	signal.Notify(ch, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	go func() {
-		<-ch
-		exit()
-	}()
+func createLock(lockFile string) error {
+	file, err := os.Create(lockFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return nil
 }
