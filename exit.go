@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-type iExitable interface {
+type IExitable interface {
 	Exit() error
 }
 
@@ -23,7 +23,7 @@ func (this call_back_func) Exit() error {
 }
 
 type nameFn struct {
-	fn  iExitable
+	fn  IExitable
 	opt *Option
 }
 
@@ -71,7 +71,7 @@ func (this *exitManager) Push(fn func() error, opts ...*Option) {
 	sort.Slice(this.tasks, func(i, j int) bool { return *this.tasks[i].opt.priority > *this.tasks[j].opt.priority })
 }
 
-func (this *exitManager) PushExitable(fn iExitable, opts ...*Option) {
+func (this *exitManager) PushExitable(fn IExitable, opts ...*Option) {
 	opt := Options().Merge(opts...)
 	this.l.Lock()
 	defer this.l.Unlock()
@@ -92,7 +92,7 @@ func (this *exitManager) exit() {
 
 	for _, obj := range this.tasks {
 		done := make(chan error)
-		go func(f iExitable) {
+		go func(f IExitable) {
 			done <- f.Exit()
 		}(obj.fn)
 		timeout := *obj.opt.timeout
