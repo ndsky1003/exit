@@ -27,7 +27,7 @@ type nameFn struct {
 	opt *Option
 }
 
-type exitManager struct {
+type ExitManager struct {
 	tasks   []nameFn
 	exiting int32
 	ch      chan os.Signal
@@ -35,7 +35,7 @@ type exitManager struct {
 	opt     *OptionMgr
 }
 
-func NewExitManager(opts ...*OptionMgr) *exitManager {
+func NewExitManager(opts ...*OptionMgr) *ExitManager {
 	opt := OptionsMgr().
 		SetLockFile(fmt.Sprintf("/tmp/%s.lock", filepath.Base(os.Args[0]))).
 		Merge(opts...)
@@ -50,7 +50,7 @@ func NewExitManager(opts ...*OptionMgr) *exitManager {
 		fmt.Printf("Failed to create lock file: %v\n", err)
 		os.Exit(1)
 	}
-	em := &exitManager{
+	em := &ExitManager{
 		ch:  make(chan os.Signal),
 		opt: opt,
 	}
@@ -59,7 +59,7 @@ func NewExitManager(opts ...*OptionMgr) *exitManager {
 	return em
 }
 
-func (this *exitManager) Push(fn func() error, opts ...*Option) {
+func (this *ExitManager) Push(fn func() error, opts ...*Option) {
 	opt := Options().
 		SetPriority(0).
 		SetTimeout(10 * time.Second).
@@ -71,7 +71,7 @@ func (this *exitManager) Push(fn func() error, opts ...*Option) {
 	sort.Slice(this.tasks, func(i, j int) bool { return *this.tasks[i].opt.priority > *this.tasks[j].opt.priority })
 }
 
-func (this *exitManager) PushExitable(fn IExitable, opts ...*Option) {
+func (this *ExitManager) PushExitable(fn IExitable, opts ...*Option) {
 	opt := Options().Merge(opts...)
 	this.l.Lock()
 	defer this.l.Unlock()
@@ -79,7 +79,7 @@ func (this *exitManager) PushExitable(fn IExitable, opts ...*Option) {
 	sort.Slice(this.tasks, func(i, j int) bool { return *this.tasks[i].opt.priority > *this.tasks[j].opt.priority })
 }
 
-func (this *exitManager) exit() {
+func (this *ExitManager) exit() {
 	if b := atomic.CompareAndSwapInt32(&this.exiting, 0, 1); !b {
 		return
 	}
@@ -115,7 +115,7 @@ func (this *exitManager) exit() {
 	os.Exit(0)
 }
 
-func (em *exitManager) waitForSignal() {
+func (em *ExitManager) waitForSignal() {
 	<-em.ch
 	em.exit()
 }
